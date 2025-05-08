@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aws/eks-hybrid/internal/retrier"
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/strings/slices"
 	"sigs.k8s.io/yaml"
@@ -96,19 +96,15 @@ func GetPodsOnNode(ctx context.Context, nodeName string, clientset kubernetes.In
 
 	var pods *corev1.PodList
 	var err error
-	consecutiveErrors := 0
-	err = wait.PollUntilContextTimeout(ctx, opts.ValidationInterval, opts.ValidationTimeout, true, func(ctx context.Context) (bool, error) {
+	err = retrier.PollWithRetriesCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
+		var err error
 		pods, err = clientset.CoreV1().Pods("").List(ctx,
 			metav1.ListOptions{
 				FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
 			},
 		)
 		if err != nil {
-			consecutiveErrors += 1
-			if consecutiveErrors == opts.MaxRetries {
-				return false, errors.Wrap(err, "failed to list all pods running on the node")
-			}
-			return false, nil // continue polling
+			return false, errors.Wrap(err, "failed to list all pods running on the node")
 		}
 		return true, nil
 	})
