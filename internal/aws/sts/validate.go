@@ -13,7 +13,13 @@ import (
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
+// CheckEndpointAccess checks if the STS endpoint is accessible
 func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
+	return CheckEndpointAccessWithPoller(ctx, config, retrier.NewDefaultPoller())
+}
+
+// CheckEndpointAccessWithPoller checks if the STS endpoint is accessible using the provided poller
+func CheckEndpointAccessWithPoller(ctx context.Context, config aws.Config, poller retrier.Poller) error {
 	client := sts_sdk.NewFromConfig(config)
 	opts := client.Options()
 
@@ -25,7 +31,7 @@ func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
 		return fmt.Errorf("resolving sts endpoint: %w", err)
 	}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		err := network.CheckConnectionToHost(ctx, endpoint.URI)
 		return err == nil, err
 	})
@@ -38,18 +44,28 @@ func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
 
 // AuthenticationValidator validates if the machine can authenticate against AWS.
 type AuthenticationValidator struct {
-	aws aws.Config
+	aws    aws.Config
+	poller retrier.Poller
 }
 
 // NewAuthenticationValidator returns a new AuthenticationValidator.
 func NewAuthenticationValidator(aws aws.Config) AuthenticationValidator {
 	return AuthenticationValidator{
-		aws: aws,
+		aws:    aws,
+		poller: retrier.NewDefaultPoller(),
+	}
+}
+
+// NewAuthenticationValidatorWithPoller returns a new AuthenticationValidator with a custom poller.
+func NewAuthenticationValidatorWithPoller(aws aws.Config, poller retrier.Poller) AuthenticationValidator {
+	return AuthenticationValidator{
+		aws:    aws,
+		poller: poller,
 	}
 }
 
 func (a AuthenticationValidator) Run(ctx context.Context, informer validation.Informer, _ *api.NodeConfig) error {
-	if err := CheckEndpointAccess(ctx, a.aws); err != nil {
+	if err := CheckEndpointAccessWithPoller(ctx, a.aws, a.poller); err != nil {
 		// If can't access the endpoint, we can't authenticate
 		// This is not a requirement, so it's possible that the user never allowed
 		// connection to the STS endpoint. In that case, assume success and let
@@ -65,7 +81,7 @@ func (a AuthenticationValidator) Run(ctx context.Context, informer validation.In
 
 	client := sts_sdk.NewFromConfig(a.aws)
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		_, err := client.GetCallerIdentity(ctx, &sts_sdk.GetCallerIdentityInput{})
 		return err == nil, err
 	})

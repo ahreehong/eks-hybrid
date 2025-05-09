@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/aws/eks-hybrid/internal/api"
 	"github.com/aws/eks-hybrid/internal/kubernetes"
+	"github.com/aws/eks-hybrid/internal/retrier"
 	"github.com/aws/eks-hybrid/internal/test"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
@@ -134,6 +136,32 @@ func TestMakeUnauthenticatedRequestUnauthorized(t *testing.T) {
 	g.Expect(kubernetes.MakeUnauthenticatedRequest(ctx, server.URL, server.CAPEM())).To(Succeed())
 }
 
+func TestMakeUnauthenticatedRequestWithMockPoller(t *testing.T) {
+	g := NewGomegaWithT(t)
+	ctx := context.Background()
+	mockPoller := retrier.NewMockPoller()
+
+	// Set up the mock to return an error
+	expectedErr := errors.New("mock poller error")
+	mockPoller.PollFunc = func(ctx context.Context, conditionFunc func(ctx context.Context) (bool, error)) error {
+		return expectedErr
+	}
+
+	// Generate a valid CA certificate for the test
+	ca, err := generateSelfSignedCert()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Call the function with our mock poller
+	err = kubernetes.MakeUnauthenticatedRequestWithPoller(ctx, "https://example.com", ca, mockPoller)
+
+	// Verify the error is returned and the mock was called
+	g.Expect(err.Error()).To(ContainSubstring(expectedErr.Error()))
+	g.Expect(mockPoller.PollCalls).To(HaveLen(1))
+
+	// Verify the remediation message
+	g.Expect(validation.Remediation(err)).To(Equal("Ensure the provided Kubernetes API server endpoint is correct and the CA certificate is valid for that endpoint."))
+}
+
 func TestCheckUnauthenticatedAccessSuccess(t *testing.T) {
 	g := NewGomegaWithT(t)
 	ctx := context.Background()
@@ -193,6 +221,43 @@ func TestCheckUnauthenticatedAccessError(t *testing.T) {
 	g.Expect(informer.Started).To(BeTrue())
 	g.Expect(informer.DoneWith).To(MatchError(ContainSubstring("failed to verify certificate: x509: certificate signed by unknown authority")))
 	g.Expect(validation.Remediation(informer.DoneWith)).To(Equal("Ensure the provided Kubernetes API server endpoint is correct and the CA certificate is valid for that endpoint."))
+}
+
+func TestCheckUnauthenticatedAccessWithMockPoller(t *testing.T) {
+	g := NewGomegaWithT(t)
+	ctx := context.Background()
+	informer := test.NewFakeInformer()
+	mockPoller := retrier.NewMockPoller()
+
+	// Set up the mock to return an error
+	expectedErr := errors.New("mock poller error")
+	mockPoller.PollFunc = func(ctx context.Context, conditionFunc func(ctx context.Context) (bool, error)) error {
+		return expectedErr
+	}
+
+	// Generate a valid CA certificate for the test
+	ca, err := generateSelfSignedCert()
+	g.Expect(err).NotTo(HaveOccurred())
+
+	node := &api.NodeConfig{
+		Spec: api.NodeConfigSpec{
+			Cluster: api.ClusterDetails{
+				APIServerEndpoint:    "https://example.com",
+				CertificateAuthority: ca,
+			},
+		},
+	}
+
+	// Call the function with our mock poller
+	err = kubernetes.CheckUnauthenticatedAccessWithPoller(ctx, informer, node, mockPoller)
+
+	// Verify the error is returned and the mock was called
+	g.Expect(err.Error()).To(ContainSubstring(expectedErr.Error()))
+	g.Expect(mockPoller.PollCalls).To(HaveLen(1))
+
+	// Verify the informer was called
+	g.Expect(informer.Started).To(BeTrue())
+	g.Expect(informer.DoneWith.Error()).To(ContainSubstring(expectedErr.Error()))
 }
 
 func generateSelfSignedCert() ([]byte, error) {

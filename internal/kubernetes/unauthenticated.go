@@ -16,7 +16,13 @@ import (
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
+// MakeUnauthenticatedRequest makes an unauthenticated request to the Kubernetes API endpoint
 func MakeUnauthenticatedRequest(ctx context.Context, endpoint string, caCertificate []byte) error {
+	return MakeUnauthenticatedRequestWithPoller(ctx, endpoint, caCertificate, retrier.NewDefaultPoller())
+}
+
+// MakeUnauthenticatedRequestWithPoller makes an unauthenticated request to the Kubernetes API endpoint using the provided poller
+func MakeUnauthenticatedRequestWithPoller(ctx context.Context, endpoint string, caCertificate []byte, poller retrier.Poller) error {
 	caCertPool := x509.NewCertPool()
 	if !caCertPool.AppendCertsFromPEM(caCertificate) {
 		return validation.WithRemediation(errors.New("failed to parse Cluster CA certificate"),
@@ -39,7 +45,7 @@ func MakeUnauthenticatedRequest(ctx context.Context, endpoint string, caCertific
 
 	var resp *http.Response
 	var body []byte
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		var err error
 		resp, err = client.Do(req)
 		if err != nil {
@@ -81,7 +87,13 @@ type apiServerResponse struct {
 	Code    int64  `json:"code"`
 }
 
+// CheckUnauthenticatedAccess validates that the node can make an unauthenticated request to the Kubernetes API endpoint
 func CheckUnauthenticatedAccess(ctx context.Context, informer validation.Informer, node *api.NodeConfig) error {
+	return CheckUnauthenticatedAccessWithPoller(ctx, informer, node, retrier.NewDefaultPoller())
+}
+
+// CheckUnauthenticatedAccessWithPoller validates that the node can make an unauthenticated request to the Kubernetes API endpoint using the provided poller
+func CheckUnauthenticatedAccessWithPoller(ctx context.Context, informer validation.Informer, node *api.NodeConfig, poller retrier.Poller) error {
 	name := "kubernetes-unauthenticated-request"
 	var err error
 	informer.Starting(ctx, name, "Validating unauthenticated request to Kubernetes API endpoint")
@@ -89,7 +101,7 @@ func CheckUnauthenticatedAccess(ctx context.Context, informer validation.Informe
 		informer.Done(ctx, name, err)
 	}()
 
-	if err = MakeUnauthenticatedRequest(ctx, node.Spec.Cluster.APIServerEndpoint, node.Spec.Cluster.CertificateAuthority); err != nil {
+	if err = MakeUnauthenticatedRequestWithPoller(ctx, node.Spec.Cluster.APIServerEndpoint, node.Spec.Cluster.CertificateAuthority, poller); err != nil {
 		return err
 	}
 

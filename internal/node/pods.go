@@ -88,6 +88,11 @@ func getStaticPodsOnNode() ([]string, error) {
 
 // GetPodsOnNode makes 5 attempts by default to list pods before erroring unless it times out.
 func GetPodsOnNode(ctx context.Context, nodeName string, clientset kubernetes.Interface, options ...NodeValidationOption) ([]corev1.Pod, error) {
+	return GetPodsOnNodeWithPoller(ctx, nodeName, clientset, retrier.NewDefaultPoller(), options...)
+}
+
+// GetPodsOnNodeWithPoller makes 5 attempts by default to list pods before erroring unless it times out, using the provided poller.
+func GetPodsOnNodeWithPoller(ctx context.Context, nodeName string, clientset kubernetes.Interface, poller retrier.Poller, options ...NodeValidationOption) ([]corev1.Pod, error) {
 	opts := DefaultNodeValidationOptions()
 
 	for _, option := range options {
@@ -96,7 +101,7 @@ func GetPodsOnNode(ctx context.Context, nodeName string, clientset kubernetes.In
 
 	var pods *corev1.PodList
 	var err error
-	err = retrier.PollWithRetriesCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
+	err = poller.PollCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
 		var err error
 		pods, err = clientset.CoreV1().Pods("").List(ctx,
 			metav1.ListOptions{

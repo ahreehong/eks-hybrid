@@ -83,6 +83,10 @@ func IsUnscheduled(ctx context.Context) error {
 }
 
 func IsDrained(ctx context.Context) (bool, error) {
+	return IsDrainedWithPoller(ctx, retrier.NewDefaultPoller())
+}
+
+func IsDrainedWithPoller(ctx context.Context, poller retrier.Poller) (bool, error) {
 	nodeName, err := kubelet.GetNodeName()
 	if err != nil {
 		return false, errors.Wrap(err, "getting node name from kubelet")
@@ -93,7 +97,7 @@ func IsDrained(ctx context.Context) (bool, error) {
 		return false, errors.Wrap(err, "failed to create kubernetes client")
 	}
 
-	pods, err := GetPodsOnNode(ctx, nodeName, clientset)
+	pods, err := GetPodsOnNodeWithPoller(ctx, nodeName, clientset, poller)
 	if err != nil {
 		return false, errors.Wrapf(err, "getting pods for node %s", nodeName)
 	}
@@ -122,6 +126,10 @@ func IsInitialized(ctx context.Context) error {
 }
 
 func getCurrentNode(ctx context.Context) (*v1.Node, error) {
+	return getCurrentNodeWithPoller(ctx, retrier.NewDefaultPoller())
+}
+
+func getCurrentNodeWithPoller(ctx context.Context, poller retrier.Poller) (*v1.Node, error) {
 	nodeName, err := kubelet.GetNodeName()
 	if err != nil {
 		return nil, err
@@ -132,10 +140,14 @@ func getCurrentNode(ctx context.Context) (*v1.Node, error) {
 		return nil, err
 	}
 
-	return getNode(ctx, nodeName, clientset)
+	return getNodeWithPoller(ctx, nodeName, clientset, poller)
 }
 
 func getNode(ctx context.Context, nodeName string, clientset kubernetes.Interface, options ...NodeValidationOption) (*v1.Node, error) {
+	return getNodeWithPoller(ctx, nodeName, clientset, retrier.NewDefaultPoller(), options...)
+}
+
+func getNodeWithPoller(ctx context.Context, nodeName string, clientset kubernetes.Interface, poller retrier.Poller, options ...NodeValidationOption) (*v1.Node, error) {
 	opts := DefaultNodeValidationOptions()
 
 	for _, option := range options {
@@ -144,7 +156,7 @@ func getNode(ctx context.Context, nodeName string, clientset kubernetes.Interfac
 
 	var node *v1.Node
 	var err error
-	err = retrier.PollWithRetriesCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
+	err = poller.PollCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
 		var err error
 		node, err = clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {

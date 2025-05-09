@@ -12,12 +12,22 @@ import (
 )
 
 type AccessValidator struct {
-	aws aws.Config
+	aws    aws.Config
+	poller retrier.Poller
 }
 
 func NewAccessValidator(config aws.Config) AccessValidator {
 	return AccessValidator{
-		aws: config,
+		aws:    config,
+		poller: retrier.NewDefaultPoller(),
+	}
+}
+
+// NewAccessValidatorWithPoller creates an AccessValidator with a custom poller
+func NewAccessValidatorWithPoller(config aws.Config, poller retrier.Poller) AccessValidator {
+	return AccessValidator{
+		aws:    config,
+		poller: poller,
 	}
 }
 
@@ -26,7 +36,7 @@ func (a AccessValidator) Run(ctx context.Context, informer validation.Informer, 
 	// When not specified, we need to read them from the EKS API.
 	var err error
 	var cluster *api.ClusterDetails
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		// var err error
 		cluster, err = eks.ReadClusterDetails(ctx, a.aws, node)
 		return err == nil, err

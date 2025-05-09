@@ -32,11 +32,21 @@ type Kubelet interface {
 
 type APIServerValidator struct {
 	kubelet Kubelet
+	poller  retrier.Poller
 }
 
 func NewAPIServerValidator(kubelet Kubelet) APIServerValidator {
 	return APIServerValidator{
 		kubelet: kubelet,
+		poller:  retrier.NewDefaultPoller(),
+	}
+}
+
+// NewAPIServerValidatorWithPoller creates an APIServerValidator with a custom poller
+func NewAPIServerValidatorWithPoller(kubelet Kubelet, poller retrier.Poller) APIServerValidator {
+	return APIServerValidator{
+		kubelet: kubelet,
+		poller:  poller,
 	}
 }
 
@@ -54,7 +64,7 @@ func (a APIServerValidator) MakeAuthenticatedRequest(ctx context.Context, inform
 		return err
 	}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		_, err := client.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
 		return err == nil, err
 	})
@@ -91,7 +101,7 @@ func (a APIServerValidator) CheckIdentity(ctx context.Context, informer validati
 
 	self := &authenticationv1.SelfSubjectReview{}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		var err error
 		self, err = client.AuthenticationV1().SelfSubjectReviews().Create(ctx, self, metav1.CreateOptions{})
 		return err == nil, err
@@ -150,7 +160,7 @@ func (a APIServerValidator) CheckVPCEndpointAccess(ctx context.Context, informer
 	}
 
 	var kubeEndpoint *v1.Endpoints
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 		var err error
 		kubeEndpoint, err = client.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
 		return err == nil, err
@@ -186,7 +196,7 @@ func (a APIServerValidator) CheckVPCEndpointAccess(ctx context.Context, informer
 				Host:   fmt.Sprintf("%s:%d", address.IP, port),
 			}
 
-			err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+			err = a.poller.Poll(ctx, func(ctx context.Context) (bool, error) {
 				err := network.CheckConnectionToHost(ctx, u)
 				return err == nil, err
 			})
