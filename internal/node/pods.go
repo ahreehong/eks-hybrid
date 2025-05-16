@@ -15,7 +15,7 @@ import (
 	"k8s.io/utils/strings/slices"
 	"sigs.k8s.io/yaml"
 
-	"github.com/aws/eks-hybrid/internal/retrier"
+	k8s "github.com/aws/eks-hybrid/internal/kubernetes"
 )
 
 type podFilter func([]corev1.Pod) ([]corev1.Pod, error)
@@ -95,19 +95,11 @@ func GetPodsOnNode(ctx context.Context, nodeName string, clientset kubernetes.In
 		option(&opts)
 	}
 
-	var pods *corev1.PodList
-	err := retrier.PollWithRetriesCustom(ctx, opts.ValidationInterval, opts.ValidationTimeout, opts.MaxRetries, func(ctx context.Context) (bool, error) {
-		var err error
-		pods, err = clientset.CoreV1().Pods("").List(ctx,
-			metav1.ListOptions{
-				FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
-			},
-		)
-		if err != nil {
-			return false, errors.Wrap(err, "failed to list all pods running on the node")
-		}
-		return true, nil
-	})
+	pods, err := k8s.ListRetry(ctx, clientset.CoreV1().Pods(""),
+		func(lo *k8s.ListOptions) {
+			lo.FieldSelector = fmt.Sprintf("spec.nodeName=%s", nodeName)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}

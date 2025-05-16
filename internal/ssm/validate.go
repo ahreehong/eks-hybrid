@@ -9,7 +9,7 @@ import (
 
 	"github.com/aws/eks-hybrid/internal/api"
 	"github.com/aws/eks-hybrid/internal/network"
-	"github.com/aws/eks-hybrid/internal/retrier"
+	"github.com/aws/eks-hybrid/internal/retry"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
@@ -25,9 +25,9 @@ func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
 		return fmt.Errorf("resolving ssm endpoint: %w", err)
 	}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		err := network.CheckConnectionToHost(ctx, endpoint.URI)
-		return err == nil, err
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("checking connection to ssm endpoint: %w", err)

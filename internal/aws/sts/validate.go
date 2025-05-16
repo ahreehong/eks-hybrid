@@ -9,7 +9,7 @@ import (
 
 	"github.com/aws/eks-hybrid/internal/api"
 	"github.com/aws/eks-hybrid/internal/network"
-	"github.com/aws/eks-hybrid/internal/retrier"
+	"github.com/aws/eks-hybrid/internal/retry"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
@@ -25,9 +25,9 @@ func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
 		return fmt.Errorf("resolving sts endpoint: %w", err)
 	}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		err := network.CheckConnectionToHost(ctx, endpoint.URI)
-		return err == nil, err
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("checking connection to sts endpoint: %w", err)
@@ -65,9 +65,9 @@ func (a AuthenticationValidator) Run(ctx context.Context, informer validation.In
 
 	client := sts_sdk.NewFromConfig(a.aws)
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		_, err := client.GetCallerIdentity(ctx, &sts_sdk.GetCallerIdentityInput{})
-		return err == nil, err
+		return err
 	})
 	if err != nil {
 		err = validation.WithRemediation(err, "Check your AWS configuration and make sure you can obtain valid AWS credentials.")

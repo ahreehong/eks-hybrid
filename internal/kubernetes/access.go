@@ -7,7 +7,7 @@ import (
 
 	"github.com/aws/eks-hybrid/internal/api"
 	"github.com/aws/eks-hybrid/internal/aws/eks"
-	"github.com/aws/eks-hybrid/internal/retrier"
+	"github.com/aws/eks-hybrid/internal/retry"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
@@ -26,10 +26,9 @@ func (a AccessValidator) Run(ctx context.Context, informer validation.Informer, 
 	// When not specified, we need to read them from the EKS API.
 	var err error
 	var cluster *api.ClusterDetails
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
-		// var err error
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		cluster, err = eks.ReadClusterDetails(ctx, a.aws, node)
-		return err == nil, err
+		return err
 	})
 	if err != nil {
 		err = validation.WithRemediation(err,

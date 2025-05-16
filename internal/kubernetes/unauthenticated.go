@@ -12,7 +12,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/aws/eks-hybrid/internal/api"
-	"github.com/aws/eks-hybrid/internal/retrier"
+	"github.com/aws/eks-hybrid/internal/retry"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
@@ -39,20 +39,20 @@ func MakeUnauthenticatedRequest(ctx context.Context, endpoint string, caCertific
 
 	var resp *http.Response
 	var body []byte
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		var err error
 		resp, err = client.Do(req)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		defer resp.Body.Close()
 
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return false, fmt.Errorf("reading unauthenticated request response body: %w", err)
+			return fmt.Errorf("reading unauthenticated request response body: %w", err)
 		}
-		return true, nil
+		return nil
 	})
 	if err != nil {
 		return validation.WithRemediation(err, "Ensure the provided Kubernetes API server endpoint is correct and the CA certificate is valid for that endpoint.")

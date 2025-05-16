@@ -6,10 +6,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rolesanywhere"
+	transport "github.com/aws/smithy-go/endpoints"
 
 	"github.com/aws/eks-hybrid/internal/api"
 	"github.com/aws/eks-hybrid/internal/network"
-	"github.com/aws/eks-hybrid/internal/retrier"
+	"github.com/aws/eks-hybrid/internal/retry"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
@@ -17,17 +18,22 @@ func CheckEndpointAccess(ctx context.Context, config aws.Config) error {
 	client := rolesanywhere.NewFromConfig(config)
 	opts := client.Options()
 
-	endpoint, err := opts.EndpointResolverV2.ResolveEndpoint(ctx, rolesanywhere.EndpointParameters{
-		Region:   aws.String(opts.Region),
-		Endpoint: opts.BaseEndpoint,
+	var endpoint transport.Endpoint
+	err := retry.NetworkRequest(ctx, func(ctx context.Context) error {
+		var err error
+		endpoint, err = opts.EndpointResolverV2.ResolveEndpoint(ctx, rolesanywhere.EndpointParameters{
+			Region:   aws.String(opts.Region),
+			Endpoint: opts.BaseEndpoint,
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("resolving IAM Roles Anywhere endpoint: %w", err)
 	}
 
-	err = retrier.PollWithRetries(ctx, func(ctx context.Context) (bool, error) {
+	err = retry.NetworkRequest(ctx, func(ctx context.Context) error {
 		err := network.CheckConnectionToHost(ctx, endpoint.URI)
-		return err == nil, err
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("checking connection to IAM Roles Anywhere endpoint: %w", err)
