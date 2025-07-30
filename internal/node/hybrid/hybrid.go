@@ -6,23 +6,22 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"go.uber.org/zap"
-	"k8s.io/utils/strings/slices"
 
 	"github.com/aws/eks-hybrid/internal/api"
-	"github.com/aws/eks-hybrid/internal/certificate"
+	"github.com/aws/eks-hybrid/internal/creds"
 	"github.com/aws/eks-hybrid/internal/daemon"
 	"github.com/aws/eks-hybrid/internal/kubelet"
 	"github.com/aws/eks-hybrid/internal/kubernetes"
+	"github.com/aws/eks-hybrid/internal/network"
 	"github.com/aws/eks-hybrid/internal/nodeprovider"
-	"github.com/aws/eks-hybrid/internal/system"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
 
 const (
 	nodeIpValidation            = "node-ip-validation"
+	kubeletCertValidation       = "kubelet-cert-validation"
 	kubeletVersionSkew          = "kubelet-version-skew-validation"
 	ntpSyncValidation           = "ntp-sync-validation"
-	awsCredentialsValidation    = "aws-credentials-validation"
 	apiServerEndpointResolution = "api-server-endpoint-resolution-validation"
 )
 
@@ -34,7 +33,7 @@ type HybridNodeProvider struct {
 	logger        *zap.Logger
 	cluster       *types.Cluster
 	skipPhases    []string
-	network       Network
+	network       network.Network
 	// CertPath is the path to the kubelet certificate
 	// If not provided, defaults to kubelet.KubeletCurrentCertPath
 	certPath string
@@ -48,7 +47,7 @@ func NewHybridNodeProvider(nodeConfig *api.NodeConfig, skipPhases []string, logg
 		nodeConfig: nodeConfig,
 		logger:     logger,
 		skipPhases: skipPhases,
-		network:    &defaultKubeletNetwork{},
+		network:    network.NewDefaultNetwork(),
 		certPath:   kubelet.KubeletCurrentCertPath,
 		kubelet:    kubelet.New(),
 	}
@@ -78,9 +77,9 @@ func WithCluster(cluster *types.Cluster) NodeProviderOpt {
 }
 
 // WithNetwork adds network util functions to the HybridNodeProvider for testing purposes.
-func WithNetwork(network Network) NodeProviderOpt {
+func WithNetwork(net network.Network) NodeProviderOpt {
 	return func(hnp *HybridNodeProvider) {
-		hnp.network = network
+		hnp.network = net
 	}
 }
 
@@ -107,49 +106,32 @@ func (hnp *HybridNodeProvider) Logger() *zap.Logger {
 }
 
 func (hnp *HybridNodeProvider) Validate(ctx context.Context) error {
-	if !slices.Contains(hnp.skipPhases, nodeIpValidation) {
-		if err := hnp.ValidateNodeIP(); err != nil {
-			return err
-		}
+	// Create logger printer for structured validation logging
+	printer := validation.NewLoggerPrinterWithLogger(hnp.logger)
+
+	// Create validation runner with skip phases support
+	runner := validation.NewRunner[*api.NodeConfig](printer, validation.WithSkipValidations(hnp.skipPhases...))
+
+	// Register AWS credential validations if AWS config is available
+	if hnp.awsConfig != nil {
+		runner.Register(creds.Validations(*hnp.awsConfig, hnp.nodeConfig)...)
 	}
 
-	if !slices.Contains(hnp.skipPhases, certificate.KubeletCertValidation) {
-		hnp.logger.Info("Validating kubelet certificate...")
-		if err := certificate.Validate(hnp.certPath, hnp.nodeConfig.Spec.Cluster.CertificateAuthority); err != nil {
-			// Ignore date validation errors in the hybrid provider since kubelet will regenerate them
-			// Ignore no cert errors since we expect it to not exist
-			if certificate.IsDateValidationError(err) || certificate.IsNoCertError(err) {
-				return nil
-			}
+	// Register all hybrid node validations
+	runner.Register(
+		validation.New(nodeIpValidation, hnp.ValidateNodeIP),
+		validation.New(kubeletCertValidation, hnp.ValidateCertificateIfExists),
+		validation.New(kubeletVersionSkew, hnp.ValidateKubeletVersionSkew),
+		validation.New(apiServerEndpointResolution, kubernetes.ValidateAPIServerEndpointResolution),
+	)
 
-			return certificate.AddKubeletRemediation(hnp.certPath, err)
-		}
+	// Run all validations sequentially
+	if err := runner.Sequentially(ctx, hnp.nodeConfig); err != nil {
+		hnp.logger.Error("Hybrid node validation failures detected", zap.Error(err))
+		return err
 	}
 
-	if !slices.Contains(hnp.skipPhases, kubeletVersionSkew) {
-		if err := hnp.ValidateKubeletVersionSkew(); err != nil {
-			return validation.WithRemediation(err,
-				"Ensure the hybrid node's Kubernetes version follows the version skew policy of the EKS cluster. "+
-					"Update the node's Kubernetes components using 'nodeadm upgrade' or reinstall with a compatible version. https://kubernetes.io/releases/version-skew-policy/#kubelet")
-		}
-	}
-
-	if !slices.Contains(hnp.skipPhases, ntpSyncValidation) {
-		hnp.logger.Info("Validating NTP synchronization...")
-		ntpValidator := system.NewNTPValidator()
-		if err := ntpValidator.Validate(); err != nil {
-			return err
-		}
-	}
-
-	if !slices.Contains(hnp.skipPhases, apiServerEndpointResolution) {
-		hnp.logger.Info("Validating API Server endpoint connection...")
-		connectionValidator := kubernetes.NewConnectionValidator()
-		if err := connectionValidator.CheckConnection(ctx, hnp.nodeConfig); err != nil {
-			return err
-		}
-	}
-
+	hnp.logger.Info("All hybrid node validations passed successfully")
 	return nil
 }
 
